@@ -1,0 +1,52 @@
+{
+  "name": "notes-poke",
+  "version": "0.1.0",
+  "description": "Local Apple Notes MCP server for Poke",
+  "type": "module",
+  "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ysmaliak/notes-poke.git"
+  },
+  "homepage": "https://github.com/ysmaliak/notes-poke#readme",
+  "bugs": {
+    "url": "https://github.com/ysmaliak/notes-poke/issues"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "bin": {
+    "notes-poke": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/cli.ts start",
+    "setup": "tsx src/cli.ts setup",
+    "connect": "tsx src/cli.ts connect",
+    "dev": "tsx src/cli.ts start",
+    "check": "tsc --noEmit",
+    "prepublishOnly": "npm run check && npm run build"
+  },
+  "keywords": [
+    "notes",
+    "apple-notes",
+    "poke",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^14.0.2",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.10.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
