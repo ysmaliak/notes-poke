@@ -140,12 +140,12 @@ on noteJson(n, includeBody)
   end tell
 end noteJson
 `;
-export async function getVersion() {
+export async function getVersion(options = {}) {
     return await runAppleScript(`
 tell application "Notes"
   return version
 end tell
-`);
+`, options);
 }
 export async function getAccounts() {
     const output = await runAppleScript(`

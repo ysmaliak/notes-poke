@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { execFile, spawn } from "node:child_process";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -27,9 +27,88 @@ async function runSetup(options: { touchNotes?: boolean; touchThings?: boolean }
   if (options.touchNotes || options.touchThings) {
     const version = await getVersion();
     console.log(`OK Apple Notes responded: ${version}`);
-  } else {
-    console.log("Tip: run `notes-poke setup --touch-notes` to request/check macOS Automation permission.");
   }
+}
+
+async function ensureDedicatedNode(): Promise<string> {
+  const binDir = join(stateDir, "bin");
+  const binPath = join(binDir, "notes-poke-node");
+  const sourcePath = await realpath(process.execPath);
+
+  const smokeTest = async () => {
+    const result = await execFileAsync(binPath, ["--version"], { rejectOnError: false });
+    return result.code === 0;
+  };
+
+  try {
+    await access(binPath, constants.X_OK);
+    if (await smokeTest()) {
+      return binPath;
+    }
+    await rm(binPath, { force: true });
+  } catch {
+    // No usable copy yet.
+  }
+
+  await mkdir(binDir, { recursive: true });
+  await copyFile(sourcePath, binPath);
+  await chmod(binPath, 0o755);
+
+  if (await smokeTest()) {
+    console.log(`OK dedicated runtime at ${binPath}`);
+    return binPath;
+  }
+
+  await rm(binPath, { force: true });
+  console.warn(`Warning: your node binary (${sourcePath}) is not relocatable; using it directly. Upgrading node may require rerunning \`notes-poke install\`.`);
+  return sourcePath;
+}
+
+async function waitForServer(port: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2_000) });
+      if (response.ok) {
+        return;
+      }
+    } catch {
+      // Server not up yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`Server did not respond on port ${port} within 15s. Check logs in ${logDir}.`);
+}
+
+async function authorizeAutomation(port: string): Promise<boolean> {
+  console.log("");
+  console.log("Requesting macOS Automation permission for the background service...");
+  console.log("macOS will show a dialog: \"notes-poke-node\" wants access to control \"Notes\". Click Allow.");
+  console.log("Waiting up to 2 minutes...");
+
+  let result: { status: string; appVersion?: string; message?: string };
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health/automation?timeoutMs=120000`, {
+      signal: AbortSignal.timeout(130_000),
+    });
+    result = (await response.json()) as typeof result;
+  } catch (error) {
+    result = { status: "error", message: error instanceof Error ? error.message : String(error) };
+  }
+
+  if (result.status === "granted") {
+    console.log(`OK Automation permission granted (Notes ${result.appVersion}). You will not be asked again.`);
+    return true;
+  }
+
+  console.error("");
+  console.error(`Automation permission was not granted (${result.status}).`);
+  if (result.message) {
+    console.error(result.message);
+  }
+  console.error("To fix: open System Settings > Privacy & Security > Automation, enable Notes under \"notes-poke-node\", then rerun `notes-poke install`.");
+  console.error("If no toggle appears there, run `tccutil reset AppleEvents` and rerun `notes-poke install`.");
+  return false;
 }
 
 function xmlEscape(value: string): string {
@@ -145,15 +224,16 @@ async function installServices(options: {
   port: string;
   tunnel: boolean;
   recipe?: boolean;
-  touchNotes?: boolean;
 }) {
-  await runSetup({ touchNotes: options.touchNotes ?? true });
+  await runSetup({ touchNotes: false });
   if (options.tunnel) {
     await ensurePokeLogin();
   }
 
   await mkdir(logDir, { recursive: true });
   await mkdir(launchAgentsDir, { recursive: true });
+
+  const nodeBin = await ensureDedicatedNode();
 
   const serverPlistPath = join(launchAgentsDir, `${serverLabel}.plist`);
   const tunnelPlistPath = join(launchAgentsDir, `${tunnelLabel}.plist`);
@@ -173,7 +253,7 @@ async function installServices(options: {
     serverPlistPath,
     plist(
       serverLabel,
-      [process.execPath, cliPath, "start", "--host", options.host, "--port", options.port],
+      [nodeBin, cliPath, "start", "--host", options.host, "--port", options.port],
       join(logDir, "server.log"),
       join(logDir, "server.error.log"),
       {
@@ -185,6 +265,14 @@ async function installServices(options: {
 
   await bootstrap(serverLabel, serverPlistPath);
   console.log(`OK installed and started ${serverLabel}`);
+
+  await waitForServer(options.port);
+  const authorized = await authorizeAutomation(options.port);
+  if (!authorized) {
+    console.error("Skipping tunnel setup until Automation permission is granted.");
+    process.exitCode = 1;
+    return;
+  }
 
   if (options.tunnel) {
     await writeLaunchAgent(
@@ -240,7 +328,7 @@ async function status() {
 program
   .name("notes-poke")
   .description("Local Apple Notes MCP server for Poke")
-  .version("0.1.0");
+  .version("0.1.1");
 
 program
   .command("setup")
@@ -300,8 +388,7 @@ program
   .option("--port <port>", "Port to bind", process.env.NOTES_POKE_PORT ?? "8766")
   .option("--recipe", "Ask Poke CLI to create a shareable recipe link from the tunnel")
   .option("--no-tunnel", "Only install the local MCP server; do not start the Poke tunnel")
-  .option("--no-touch-notes", "Do not touch Apple Notes during setup")
-  .action((options: { name: string; host: string; port: string; recipe?: boolean; tunnel: boolean; touchNotes: boolean }) => installServices(options));
+  .action((options: { name: string; host: string; port: string; recipe?: boolean; tunnel: boolean }) => installServices(options));
 
 program
   .command("uninstall")

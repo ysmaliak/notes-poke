@@ -162,12 +162,12 @@ on noteJson(n, includeBody)
 end noteJson
 `;
 
-export async function getVersion(): Promise<string> {
+export async function getVersion(options: { timeoutMs?: number } = {}): Promise<string> {
   return await runAppleScript(`
 tell application "Notes"
   return version
 end tell
-`);
+`, options);
 }
 
 export async function getAccounts(): Promise<unknown[]> {
